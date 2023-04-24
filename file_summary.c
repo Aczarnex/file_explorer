@@ -13,12 +13,14 @@
 typedef struct thread_data {
 	long int ncount;
 	long int acount;
+	long int ucount;
 	long int fsize;
 	long int workload;
 	atomic_long* pos;
 	char* fname;
 	int buff_size;
 	int status;
+	int is_utf8;
 }TData;
 
 enum err_codes {SUCCESS, INPUT_INVAL, FILE_INACC, FAIL_ALLOC, NO_THREAD_ALIVE};
@@ -56,6 +58,8 @@ int main(int argc, char *argv[])
 	atomic_long pos = 0;
 	long int ncount_final = 0;
 	long int acount_final = 0;
+	long int ucount_final = 0;
+	int is_utf8 = 1;
 	int threads_running = 0;
 
 	if (strlen(argv[1]) >= 256 || argc == 1)
@@ -99,7 +103,7 @@ int main(int argc, char *argv[])
 		tdata[i].pos = &pos;
 		tdata[i].buff_size = buff_size;
 		if (pthread_create(&t_id[i], NULL, parse_count,
-		    (void *)&tdata[i]))
+		    				  (void *)&tdata[i]))	//?
 			fprintf(stderr, "Failure to start a thread.\n");
 		else
 			threads_running++;
@@ -123,17 +127,24 @@ int main(int argc, char *argv[])
 		}
 		ncount_final += tdata[i].ncount;
 		acount_final += tdata[i].acount;
+		ucount_final += tdata[i].ucount;
+		is_utf8 = is_utf8 & tdata[i].is_utf8;
 	}
 	if (!threads_running)
 		ERR_MSG(-NO_THREAD_ALIVE, "All threads failed to complete.");
 
+	char* answers[2] = {"isn't UTF8 compliant.", "is UTF8 compliant."};
 	printf(
 	"Total Size:                       %-20ld\n"
 	"Newlines:                         %-20ld\n"
-	"Alphanumeric characters:          %-20ld\n",
+	"Alphanumeric characters:          %-20ld\n"
+	"\n%s %s\n",
 	fsize,
 	ncount_final,
-	acount_final);
+	acount_final,
+	argv[1], answers[is_utf8]);
+	if (is_utf8)
+		printf("UTF8 characters:                  %-20ld\n", ucount_final);
 
 	free(t_id);
 	free(tdata);
@@ -159,6 +170,8 @@ void *parse_count(void *tdata) {
 	int buff_size = ((TData*)tdata)->buff_size;
 	long acount = 0;
 	long ncount = 0;
+	long ucount = 0;
+	int is_utf8 = 1;
 
 	char *fblock = malloc(sizeof(char) * buff_size);
 	if (!fblock) {
@@ -197,7 +210,9 @@ void *parse_count(void *tdata) {
 			for (int j = 0; j < buff_size; j++) {
 				if (fblock[j] == '\n') ncount++;
 				if (isalnum(fblock[j])) acount++;
-			}
+				if ((fblock[j] & 0xc0) != 0x80) ucount++;
+				if ((fblock[j] & 0xf8) == 0xf8) is_utf8  = 0;
+		}
 		}
 		/*
 		 * here the last piece of the file is read. fread below and the
@@ -209,11 +224,20 @@ void *parse_count(void *tdata) {
 		fread(fblock, sizeof(*fblock), workload % buff_size, handle);
 		for (int i = 0; i < workload % buff_size; i++) {
 			if (fblock[i] == '\n') ncount++;
-			if (isalnum(fblock[i])) acount++;
+			//if (isalnum(fblock[i])) acount++;
+			if (
+				(fblock[i] >= '0' && fblock[i] <= '9') ||
+				(fblock[i] >= 'A' && fblock[i] <= 'Z') ||
+				(fblock[i] >= 'a' && fblock[i] <= 'z')
+			) acount++;
+			if ((fblock[i] & 0xc0) != 0x80) ucount++;
+			if ((fblock[i] & 0xf8) == 0xf8) is_utf8 = 0;
 		}
 	}
 	((TData*)tdata)->ncount = ncount;
 	((TData*)tdata)->acount = acount;
+	((TData*)tdata)->ucount = ucount;
+	((TData*)tdata)->is_utf8 = is_utf8;
 
 	free(fblock);
 	((TData*)tdata)->status = SUCCESS;
